@@ -1,0 +1,219 @@
+// ─────────────────────────────────────────────────────────────────────
+// Tabla — commande à table par QR code (restaurants, restaurants d'hôtel)
+// Multi-tenant « schéma partagé » : chaque ligne métier porte etablissementId.
+// Conventions de nommage 100 % français.
+// ─────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────
+// Énumérations
+// ─────────────────────────────────────────────────────────────
+
+// Envoyée par le client → acceptée par l'équipe (en préparation) → servie ; ou annulée
+enum StatutCommande {
+  ENVOYEE
+  ACCEPTEE
+  SERVIE
+  ANNULEE
+}
+
+enum TypeAppel {
+  SERVEUR // « Appeler un serveur »
+  ADDITION // « Demander l'addition »
+}
+
+enum RolePersonnel {
+  DIRECTION // tout : carte, tables, informations, couleurs
+  SERVICE // commandes, appels, disponibilité des plats
+}
+
+// ─────────────────────────────────────────────────────────────
+// Établissement (restaurant ou restaurant d'hôtel)
+// ─────────────────────────────────────────────────────────────
+
+model Etablissement {
+  id                String   @id @default(cuid())
+  slug              String   @unique
+  nom               String
+  ville             String
+  // Identité visuelle : couleur de la marque, et réglages facultatifs (vide : valeur dérivée)
+  couleurAccent     String   @default("#6f7d5c")
+  couleurFond       String? // fond de la carte côté client (teinte claire)
+  couleurHoraires   String? // horaires mis en avant sur la carte
+  couleurBoutons    String? // boutons principaux (client et espace)
+  couleurTexte      String? // textes de la carte client (noms des plats, descriptions)
+  couleurTitres     String? // titres des rubriques et rubrique active (vide : couleur des boutons)
+  // Polices et tailles de la carte client : { nomPlat: { police, taille }, prix: … }
+  typographie       Json     @default("{}")
+  langueEquipe      String   @default("fr") // langue de l'espace et des notifications
+  devise            String   @default("XOF")
+  fuseauHoraire     String   @default("Africa/Dakar")
+  telephone         String?
+  // Numéro WhatsApp prévenu à chaque commande (format international sans « + »)
+  whatsappCommandes String?
+  // Compteur des numéros de commande (#1, #2…), incrémenté de façon atomique
+  compteurCommandes Int      @default(0)
+  actif             Boolean  @default(true)
+  creeLe            DateTime @default(now())
+
+  tables     Table[]
+  categories CategorieCatalogue[]
+  articles   ArticleCatalogue[]
+  commandes  Commande[]
+  appels     Appel[]
+  personnel  Personnel[]
+}
+
+// Une table de la salle ou de la terrasse, avec son QR code
+model Table {
+  id              String   @id @default(cuid())
+  etablissementId String
+  numero          String // « 12 », « T3 », « Bar 2 »
+  zone            String? // « Terrasse », « Salle »…
+  // Jeton secret du QR code : l'adresse /t/<jeton> ne se devine pas
+  jetonQr         String   @unique
+  actif           Boolean  @default(true)
+  ordre           Int      @default(0)
+  creeLe          DateTime @default(now())
+
+  etablissement Etablissement @relation(fields: [etablissementId], references: [id], onDelete: Cascade)
+  commandes     Commande[]
+  appels        Appel[]
+
+  @@unique([etablissementId, numero])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Carte
+// ─────────────────────────────────────────────────────────────
+
+model CategorieCatalogue {
+  id              String  @id @default(cuid())
+  etablissementId String
+  nom             String
+  horaires        String? // ex. « 12h – 15h »
+  ordre           Int     @default(0)
+  // { "en": { "nom": "…" }, "es": … } — le français est la langue source
+  traductions     Json    @default("{}")
+  // Issue du modèle par défaut et pas encore validée par le gérant
+  aVerifier       Boolean @default(false)
+
+  etablissement Etablissement      @relation(fields: [etablissementId], references: [id], onDelete: Cascade)
+  articles      ArticleCatalogue[]
+
+  @@index([etablissementId])
+}
+
+model ArticleCatalogue {
+  id              String  @id @default(cuid())
+  etablissementId String
+  categorieId     String
+  nom             String
+  description     String?
+  prix            Int // en unités de la devise (FCFA : pas de décimales)
+  // Photo affichée dans la carte : chemin local (/images/…) ou lien https
+  photo           String?
+  disponible      Boolean @default(true)
+  ordre           Int     @default(0)
+  // { "en": { "nom": "…", "description": "…" }, … }
+  traductions     Json    @default("{}")
+  aVerifier       Boolean @default(false)
+
+  etablissement Etablissement      @relation(fields: [etablissementId], references: [id], onDelete: Cascade)
+  categorie     CategorieCatalogue @relation(fields: [categorieId], references: [id], onDelete: Cascade)
+  lignes        LigneCommande[]
+
+  @@index([etablissementId, disponible])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Commandes et appels
+// ─────────────────────────────────────────────────────────────
+
+model Commande {
+  id               String         @id @default(cuid())
+  etablissementId  String
+  tableId          String
+  numero           Int // numéro lisible (#42), propre à l'établissement
+  statut           StatutCommande @default(ENVOYEE)
+  langueClient     String         @default("fr")
+  note             String? // précision du client (« sans piment »), dans sa langue
+  montantTotal     Int // calculé avec les prix de la carte, jamais ceux envoyés par le client
+  // Table libérée (clients partis, addition réglée) : la commande sort du service en cours
+  cloturee         Boolean        @default(false)
+  // Annulée par le client avant que l'équipe ne l'accepte
+  annuleeParClient Boolean        @default(false)
+  creeLe           DateTime       @default(now())
+  accepteeLe       DateTime?
+  servieLe         DateTime?
+  annuleeLe        DateTime?
+  // Clé d'envoi choisie par le téléphone : un envoi répété (réseau lent, réponse perdue)
+  // retrouve la commande déjà créée au lieu d'en créer une seconde
+  cleEnvoi         String?
+
+  etablissement Etablissement   @relation(fields: [etablissementId], references: [id], onDelete: Cascade)
+  table         Table           @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  lignes        LigneCommande[]
+
+  @@unique([etablissementId, numero])
+  @@unique([tableId, cleEnvoi])
+  @@index([etablissementId, statut, creeLe])
+  @@index([tableId, cloturee])
+}
+
+model LigneCommande {
+  id           String  @id @default(cuid())
+  commandeId   String
+  articleId    String?
+  libelle      String // nom en français au moment de la commande
+  quantite     Int
+  prixUnitaire Int
+  // { "en": "…", "wo": "…" } : nom de l'article dans chaque langue au moment de la commande
+  traductions  Json    @default("{}")
+
+  commande Commande          @relation(fields: [commandeId], references: [id], onDelete: Cascade)
+  article  ArticleCatalogue? @relation(fields: [articleId], references: [id], onDelete: SetNull)
+}
+
+// « Appeler un serveur » ou « Demander l'addition » depuis la table
+model Appel {
+  id              String    @id @default(cuid())
+  etablissementId String
+  tableId         String
+  type            TypeAppel
+  traite          Boolean   @default(false)
+  creeLe          DateTime  @default(now())
+  traiteLe        DateTime?
+
+  etablissement Etablissement @relation(fields: [etablissementId], references: [id], onDelete: Cascade)
+  table         Table         @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@index([etablissementId, traite])
+  @@index([tableId, type, traite])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Personnel (espace de gestion)
+// ─────────────────────────────────────────────────────────────
+
+model Personnel {
+  id              String        @id @default(cuid())
+  etablissementId String
+  nom             String
+  email           String        @unique
+  motDePasseHash  String
+  role            RolePersonnel @default(SERVICE)
+  creeLe          DateTime      @default(now())
+
+  etablissement Etablissement @relation(fields: [etablissementId], references: [id], onDelete: Cascade)
+
+  @@index([etablissementId])
+}

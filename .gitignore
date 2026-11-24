@@ -1,0 +1,21 @@
+node_modules
+.next
+out
+src/generated
+# Secrets : tout fichier d'environnement sauf le modèle
+.env*
+!.env.example
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+
+.vercel
+.env*.local
+
+# Outils locaux
+.claude
+
+# Supports vidéo (hors application)
+tabla-generation-vide/
+tabla-generation-videoa/
+tabla-generation-video.zip

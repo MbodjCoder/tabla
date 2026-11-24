@@ -1,0 +1,9 @@
+# Jamais envoyé à Vercel : secrets locaux, dépendances et artefacts reconstruits sur place
+.env
+.env.*
+!.env.example
+node_modules
+.next
+src/generated
+*.tsbuildinfo
+docker-compose.yml

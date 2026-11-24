@@ -1,0 +1,17 @@
+# Base locale de Tabla : PostgreSQL 17 (indépendante de celle de Lalla)
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: tabla-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tabla
+      POSTGRES_PASSWORD: tabla
+      POSTGRES_DB: tabla
+    ports:
+      - "5437:5432"
+    volumes:
+      - tabla-donnees:/var/lib/postgresql/data
+
+volumes:
+  tabla-donnees:
